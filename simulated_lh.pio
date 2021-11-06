@@ -1,0 +1,90 @@
+; --------------------------------------------------
+;       Simulated Lighthouse Output using PIO
+;      by Christopher (@ZodiusInfuser) Parrott
+; --------------------------------------------------
+;
+; A simple PIO that will create a simulated sequence
+; of SteamVR Lighthouse sync and sweep pulses
+
+
+; Constants
+; --------------------------------------------------
+.define public QUAD_OUT_SET_CYCLES      10
+
+
+.program simulated_lh_out
+.wrap_target
+
+    ; First sync pulse
+    set pins, 1  [32 - 1]
+    nop [32 - 1]
+    nop [1 - 1]
+    ; 65uS to here
+
+    ; Delay to second sync pulse
+    set pins, 0 [32 - 1]
+    nop [32 - 1]
+    nop [32 - 1]
+    nop [32 - 1]
+    nop [32 - 1]
+    nop [32 - 1]
+    nop [32 - 1]
+    nop [32 - 1]
+    nop [32 - 1]
+    nop [32 - 1]
+    nop [15 - 1]
+    ; 400uS to here
+
+    ; Second sync pulse
+    set pins, 1  [32 - 1]
+    nop [32 - 1]
+    nop [32 - 1]
+    nop [29 - 1]
+    ; 125uS, 525uS to here
+    set pins, 0 [1 - 1]
+
+    ; Delay to sweep pulse
+    set y, (30 - 1) [19 - 1]
+    ; 545uS to here
+pre_sweep_delay_loop:  
+    nop [32 - 1]  
+    nop [32 - 1]
+    nop [32 - 1]
+    jmp y-- pre_sweep_delay_loop [19 - 1]
+    ; 3450uS, 3995uS to here
+
+    ; Sweep pulse
+    set pins, 1 [10 - 1]
+    set pins, 0
+    ; 4005uS to here
+
+    ; Delay until end of sequence
+    set y, (30 - 1) [8 - 1]
+    ; 4013uS to here
+post_sweep_delay_loop:
+    nop [32 - 1]  
+    nop [32 - 1]
+    nop [32 - 1]
+    nop [32 - 1]
+    jmp y-- post_sweep_delay_loop [16 - 1]
+    ; 4328uS, 8333uS to here
+.wrap
+
+
+; Initialisation Code
+; --------------------------------------------------
+% c-sdk {
+#include "hardware/clocks.h"
+
+void simulated_lh_out_program_init(PIO pio, uint sm, uint offset, uint pin)
+{
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+    pio_sm_config c = simulated_lh_out_program_get_default_config(offset);
+    sm_config_set_set_pins(&c, pin, 1);
+
+    sm_config_set_clkdiv_int_frac(&c, 125, 0); //Set SM to run at 1uS per cycle
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

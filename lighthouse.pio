@@ -1,0 +1,148 @@
+; --------------------------------------------------
+;        Lighthouse Sensor reader using PIO
+;      by Christopher (@ZodiusInfuser) Parrott
+; --------------------------------------------------
+;
+; Watches a single pin for the sync and sweep pulses from
+; any nearby lighthouses and outputs their timings.
+;
+; Includes some basic detection for valid sync and sweep pulses,
+; but further processing should be done in the main code.
+
+
+; Constants
+; --------------------------------------------------
+.define JMP_CYCLES                  5  
+
+
+; Lighthouse Sensor Program
+; --------------------------------------------------
+.program lighthouse
+.side_set 1 opt
+
+.wrap_target
+start:
+    ; Sig _________
+    jmp pin signal_gone_high side 0   ; loop as fast as possible until the sensor pin has gone high
+.wrap
+
+; --------------------------------------------------
+
+signal_gone_high:
+    ; Sig ____|‾‾‾‾
+
+    ; Set up a 415 iteration loop
+    set x, 12 side 1    ;Set the high 5 bits of our 10 bit counter
+    mov isr, x
+    set x, (31 - 1)     ;Set the low 5 bits of our 10 bit counter (-1 is because loop is a do-while)
+    in x, 5
+    mov x, isr
+    mov isr, null       ;Clear the ISR ready for later counting
+
+    ; Initialise the 16bit timer, as an inverse, and immediately decrement it to account for the time this setup takes
+    mov osr, ~null
+    out y, 16
+    jmp y-- y_dec [5]
+y_dec:
+    ;15 cycles to get to here from start
+
+blocker_loop:
+    ; Decrement the timer
+    jmp y-- loop_y_dec [7]
+loop_y_dec:
+    jmp x-- blocker_loop [JMP_CYCLES - 1 + 2]
+    ; 15 cycles per iteration
+    ; Getting to here from start takes 6240 cycles, so 49.92us
+
+    jmp pin signal_still_high
+
+    ; Sig ‾‾‾‾|____
+    jmp start   ; Ignore this pulse as it was too short
+
+; --------------------------------------------------
+
+signal_still_high:
+    ; Sig ‾‾‾‾‾‾‾‾‾
+
+    nop [5]
+signal_still_high_skip_nop:
+    ; Keep counting down
+    jmp y-- wait_y_dec [7]
+    ; 15 cycles
+    jmp start ;quick escape for if timer expires
+
+wait_y_dec:
+    ; 15 cycles
+
+    jmp pin signal_still_high
+
+
+; signal_gone_low
+    ; Sig ‾‾‾‾|____
+
+    ; Return the pulse's 16bit start and end counter values (start will be zero for the first pulse in the counting window)
+    mov x, ~y side 0 [6]
+    in x, 16 [6]
+    ; 15 cycles
+
+    push noblock
+
+    ; Now handle subsequent pulses within this counting window
+
+
+signal_still_low:
+    ; Sig _________
+
+    nop [5]
+    ; Keep counting down
+    jmp y-- wait_y_dec2 [6]
+    jmp start ;quick escape for if timer expires
+wait_y_dec2:
+    jmp pin signal_high_again
+    ; 15 cycles
+
+    jmp signal_still_low
+
+
+signal_high_again:
+    ; Sig ‾|__|‾‾‾‾
+    ; 15 cycles
+
+    ; Record the 16bit start counter value
+    mov x, ~y side 1
+    in x, 16 
+    jmp signal_still_high_skip_nop [4]
+
+
+
+; Initialisation Code
+; --------------------------------------------------
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void lighthouse_program_init(PIO pio, uint sm, uint offset, uint pin, uint sideset_pin, uint16_t divider) {
+    pio_sm_config c = lighthouse_program_get_default_config(offset);
+   
+    sm_config_set_jmp_pin(&c, pin);
+    sm_config_set_in_pins(&c, pin);
+    sm_config_set_in_shift(&c, false, false, 1);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    sm_config_set_sideset_pins(&c, sideset_pin);
+    pio_gpio_init(pio, pin);
+    pio_gpio_init(pio, sideset_pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, 0);
+    pio_sm_set_consecutive_pindirs(pio, sm, sideset_pin, 1, true);
+    sm_config_set_clkdiv_int_frac(&c, divider, 0);
+    pio_sm_init(pio, sm, offset, &c);
+}
+
+static inline void lighthouse_program_start(PIO pio, uint sm) {
+    pio_sm_exec(pio, sm, pio_encode_set(pio_x, 0));
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+static inline void lighthouse_program_release(PIO pio, uint sm) {
+    pio_sm_set_enabled(pio, sm, false);
+    pio_sm_unclaim(pio, sm);
+}
+%}
